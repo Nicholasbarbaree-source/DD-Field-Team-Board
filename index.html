@@ -392,45 +392,45 @@ function blankCandidate(){
 /* ============================================================
    PERSISTENCE — shared so any regional manager sees the roster
    ============================================================ */
-async function loadCandidates(){
-  try{
-    const idx = await window.storage.get("candidate_index", true);
-    const ids = idx ? JSON.parse(idx.value) : [];
-    const loaded = [];
-    for(const id of ids){
-      try{
-        const rec = await window.storage.get("candidate:" + id, true);
-        if(rec) loaded.push(JSON.parse(rec.value));
-      }catch(e){ /* skip missing */ }
-    }
-    loaded.sort((a,b)=> (b.updatedAt||0) - (a.updatedAt||0));
-    candidates = loaded;
-  }catch(e){
+const STORAGE_KEY = "dd-interview-scorecard-candidates";
+
+function persistCandidates() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(candidates));
+}
+
+async function loadCandidates() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    candidates = saved ? JSON.parse(saved) : [];
+  } catch (error) {
+    console.error("Could not load scorecards:", error);
     candidates = [];
   }
+
+  candidates.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   render();
 }
 
-async function saveIndex(){
-  try{
-    await window.storage.set("candidate_index", JSON.stringify(candidates.map(c=>c.id)), true);
-  }catch(e){}
+async function saveIndex() {
+  persistCandidates();
 }
 
-function scheduleSave(candidate){
+function scheduleSave(candidate) {
   candidate.updatedAt = Date.now();
+
   clearTimeout(saveTimer);
   setSaveStatus("saving");
-  saveTimer = setTimeout(async ()=>{
-    try{
-      await window.storage.set("candidate:" + candidate.id, JSON.stringify(candidate), true);
+
+  saveTimer = setTimeout(() => {
+    try {
+      persistCandidates();
       setSaveStatus("saved");
-    }catch(e){
+    } catch (error) {
+      console.error("Could not save scorecard:", error);
       setSaveStatus("error");
     }
   }, 450);
 }
-
 function setSaveStatus(status){
   const el = document.getElementById("save-status-text");
   const dot = document.getElementById("save-status-dot");
@@ -438,6 +438,77 @@ function setSaveStatus(status){
   if(status==="saving"){ el.textContent="Saving…"; dot.style.background="var(--amber)"; }
   else if(status==="saved"){ el.textContent="Saved"; dot.style.background="var(--green)"; }
   else { el.textContent="Couldn't save"; dot.style.background="var(--red)"; }
+}
+  function handleImportFile(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const incoming = Array.isArray(parsed)
+        ? parsed
+        : parsed.candidates;
+
+      if (!Array.isArray(incoming)) {
+        throw new Error("Invalid scorecard backup format.");
+      }
+
+      const existingIds = new Set(candidates.map(c => c.id));
+      let added = 0;
+      let skipped = 0;
+
+      for (const importedCandidate of incoming) {
+        if (!importedCandidate || !importedCandidate.id) {
+          continue;
+        }
+
+        if (existingIds.has(importedCandidate.id)) {
+          skipped++;
+          continue;
+        }
+
+        candidates.push(importedCandidate);
+        existingIds.add(importedCandidate.id);
+        added++;
+      }
+
+      candidates.sort(
+        (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
+      );
+
+      persistCandidates();
+
+      if (!activeId && candidates.length) {
+        activeId = candidates[0].id;
+      }
+
+      render();
+
+      showToast(
+        `Imported ${added} candidate${added === 1 ? "" : "s"}.` +
+        (skipped
+          ? ` Skipped ${skipped} already in this roster.`
+          : "")
+      );
+    } catch (error) {
+      console.error("Import failed:", error);
+      showToast(
+        "Could not import that file. Please choose a JSON backup exported from this scorecard."
+      );
+    } finally {
+      ev.target.value = "";
+    }
+  };
+
+  reader.onerror = () => {
+    showToast("Could not read the selected file.");
+    ev.target.value = "";
+  };
+
+  reader.readAsText(file);
 }
 
 /* ============================================================
@@ -962,9 +1033,6 @@ async function deleteCandidate(){
   activeRound = 1;
   ptEditing = false;
   await saveIndex();
-  try{ await window.storage.delete("candidate:" + c.id, true); }catch(e){}
-  render();
-  showToast(name + " deleted.");
 }
 
 /* ============================================================
